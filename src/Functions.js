@@ -19,6 +19,10 @@ export class Const extends Function {
   eval(inputs) {
     return {out:this.val};
   }
+
+  toGLSL() {
+    return `float ${this.outputIds.out} = ${this.val};`
+  }
 }
 
 export class Abs extends Function {
@@ -31,6 +35,10 @@ export class Abs extends Function {
 
   eval(inputs) {
     return {abs: Math.abs(inputs.op)};
+  }
+
+  toGLSL() {
+    return `float ${this.outputIds.abs} = abs(${this.inputIds.op});`
   }
 }
 
@@ -46,6 +54,10 @@ export class Plus extends Function {
   eval(inputs) {
     return {sum: (inputs.op1 + inputs.op2)};
   }
+
+  toGLSL() {
+    return `float ${this.outputIds.sum} = ${this.inputIds.op1} + ${this.inputIds.op2};`
+  }
 }
 
 export class Mult extends Function {
@@ -59,6 +71,10 @@ export class Mult extends Function {
 
   eval(inputs) {
     return {prod: (inputs.op1 * inputs.op2)};
+  }
+
+  toGLSL() {
+    return `float ${this.outputIds.prod} = ${this.inputIds.op1} * ${this.inputIds.op2};`
   }
 }
 
@@ -78,6 +94,11 @@ export class RectToPolar extends Function {
       theta: Math.atan2(inputs.y, inputs.x)
     };
   }
+
+  toGLSL() {
+    return `float ${this.outputIds.r} = (${this.inputIds.x} * ${this.inputIds.x}) + (${this.inputIds.y} * ${this.inputIds.y});\n`
+          + `float ${this.outputIds.theta} = atan(${this.inputIds.y}, ${this.inputIds.x});`
+  }
 }
 
 export class Cos extends Function {
@@ -92,5 +113,9 @@ export class Cos extends Function {
     return {
       out: Math.cos(inputs.theta)
     };
+  }
+
+  toGLSL() {
+    return `float ${this.outputIds.out} = cos(${this.inputIds.theta});`
   }
 }

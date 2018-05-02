@@ -1,136 +1,173 @@
 import React, { Component } from 'react';
-import logo from './logo.svg';
 import './App.css';
 import {Const, Abs, Plus, Mult, Cos, RectToPolar} from './Functions.js'
+
+function createShader(gl, type, source) {
+  console.log(source);
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  const success = gl.getShaderParameter(shader, gl.COMPILE_STATUS);
+  if (success) {
+    return shader;
+  } else {
+    console.log(gl.getShaderInfoLog(shader));
+    gl.deleteShader(shader);
+  }
+}
+
+function createProgram(gl, vertexShader, fragmentShader) {
+  const program = gl.createProgram();
+  gl.attachShader(program, vertexShader);
+  gl.attachShader(program, fragmentShader);
+  gl.linkProgram(program);
+  const success = gl.getProgramParameter(program, gl.LINK_STATUS);
+  if (success) {
+    return program;
+  } else {
+    console.log(gl.getProgramInfoLog(program));
+    gl.deleteProgram(program);
+  }
+}
 
 class App extends Component {
   constructor() {
     super();
     this.state = {
-      w: 100,
-      h: 100,
-      time: 0.0,
-      finalOut: {
-        r: "grayOut",
-        g: "grayOut",
-        b: "grayOut"
-      },
-      funcs: [
-        new Cos("scaledR", "grayOut"),
-        new Const(6.28, "2pi"),
-        new Mult("r", "2pi", "scaledR"),
-        new RectToPolar("x", "y", "r", "theta")
-      ],
-      funcFromOutId: {},
+      period: 10000.0,
+      graph: {
+        init: [
+          "precision highp float;"
+        ],
+        uniforms: {
+          time: "uniform float u_time;",
+          resolution: "uniform vec2 u_resolution;"
+        },
+        vars: {
+          x: "float x = (gl_FragCoord.x / u_resolution.x) * 2.0 - 1.0;",
+          y: "float y = (gl_FragCoord.y / u_resolution.y) * 2.0 - 1.0;",
+          t: "float t = u_time;"
+        },
+        out: {
+          r: "scaledOut",
+          g: "movingOut",
+          b: "t"
+        },
+        finalOut: [
+          "gl_FragColor = vec4(r, g, b, 1);"
+        ],
+        funcs: [
+          new Cos("scaledR", "scaledOut"),
+          new Cos("movingR", "movingOut"),
+          new Const(6.28, "twoPi"),
+          new Mult("scaledR", "t", "movingR"),
+          new Mult("r", "twoPi", "scaledR"),
+          new RectToPolar("x", "y", "r", "theta")
+        ]
+      }
     };
     this.canvas = React.createRef();
+  }
 
-    // Generate the dependency map
-    // Map output ids to list of dependency input ids
-    let funcFromOutId = {}
-    const funcs = this.state.funcs;
+  compileGraphToGlslFragSrc() {
+    let fragTxt = this.state.graph.init.join("\n");
+    fragTxt += "\n\n";
+    fragTxt += Object.values(this.state.graph.uniforms).join("\n");
+    fragTxt += "\n\n";
+    fragTxt += "void main() {\n";
+    fragTxt += Object.values(this.state.graph.vars).join("\n");
+    fragTxt += "\n\n";
+
+    let outIdToFunc = {};
+    const funcs = this.state.graph.funcs;
     for (let i = 0; i < funcs.length; i++) {
       const func = funcs[i];
       for (let outName in func.outputIds) {
         const outId = func.outputIds[outName];
-        funcFromOutId[outId] = func;
+        outIdToFunc[outId] = func;
       }
     }
-    this.state.funcFromOutId = funcFromOutId;
-    // console.log(funcFromOutId);
-    this.runGraph(-2,-8,3);
-  }
 
-  screenToWorldX(x) {
-    const screenWidth = this.canvas.current.width;
-    return 2 * (x / screenWidth) - 1;
-  }
-
-  screenToWorldY(y) {
-    const screenHeight = this.canvas.current.height;
-    return 2 * (y / screenHeight) - 1;
-  }
-
-  colorRangeToByte(channel) {
-    return Math.floor(channel*255);
-  }
-
-  draw(t) {
-    const canvas = this.canvas.current;
-    const imageData = this.ctx.createImageData(canvas.width, canvas.height);
-
-    for (let y = 0; y < canvas.height; y++) {
-      const worldY = this.screenToWorldY(y);
-      const yByteOffset = 4*y * canvas.width;
-      for (let x = 0; x < canvas.height; x++) {
-        const worldX = this.screenToWorldX(x);
-        let {r, g, b} = this.runGraph(worldX, worldY, t);
-        const byteOffset = yByteOffset + (x * 4);
-        imageData.data[byteOffset + 0] = this.colorRangeToByte(r);
-        imageData.data[byteOffset + 1] = this.colorRangeToByte(g);
-        imageData.data[byteOffset + 2] = this.colorRangeToByte(b);
-        imageData.data[byteOffset + 3] = 255;
-      }
-    }
-    this.ctx.putImageData(imageData, 0, 0);
-  }
-
-  runGraph(x, y, t) {
-    const funcs = this.state.funcs;
-    let stack = [];
-    let cache = {
-      x: x,
-      y: y,
-      t: t
-    };
-
-    //Generate the initial stack
-    for (let finalOutName in this.state.finalOut) {
-      const finalOutValueId = this.state.finalOut[finalOutName];
-      stack.push(finalOutValueId);
-    }
-    // console.log(stack);
-
-    while(stack.length > 0) {
+    let known = new Set(["x", "y", "t"])
+    let stack = [this.state.graph.out.r, this.state.graph.out.g, this.state.graph.out.b];
+    while (stack.length > 0) {
       const topId = stack[stack.length - 1];
-      // console.log(topId);
-      // console.log(stack);
-      // console.log(cache);
-
-      if (topId in cache) {
+      if (known.has(topId)) {
         stack.pop();
       } else {
-        const topFunc = this.state.funcFromOutId[topId];
-        const unknownDeps = Object.values(topFunc.inputIds).filter(dep => !(dep in cache));
+        const topFunc = outIdToFunc[topId];
+        const unknownDeps = Object.values(topFunc.inputIds).filter(dep => !(known.has(dep)));
         if (unknownDeps.length == 0) {
-          let inputs = {};
-          for (let inputName in topFunc.inputIds) {
-            inputs[inputName] = cache[topFunc.inputIds[inputName]];
-          }
-          const outputs = topFunc.eval(inputs);
-          for (let outputName in topFunc.outputIds) {
-            cache[topFunc.outputIds[outputName]] = outputs[outputName];
-          }
+          fragTxt += topFunc.toGLSL();
+          fragTxt += "\n";
+          known.add(topId);
           stack.pop();
         } else {
           stack = stack.concat(unknownDeps);
         }
       }
     }
-    const finalOut = this.state.finalOut;
-    return {r: cache[finalOut.r], g: cache[finalOut.g], b: cache[finalOut.b]};
+    fragTxt+= "\n";
+    fragTxt += `gl_FragColor = vec4(${this.state.graph.out.r}, ${this.state.graph.out.g}, ${this.state.graph.out.b}, 1);`
+    fragTxt += "}"
+    return fragTxt;
+  }
+
+  getGlslVertSrc() {
+    return "attribute vec2 xy_pos;\nvoid main() {\ngl_Position = vec4(xy_pos, 0, 1);\n}";
   }
 
   componentDidMount() {
     const canvas = this.canvas.current;
-    this.ctx = canvas.getContext("2d");
-    this.draw(0);
+    this.gl = canvas.getContext("webgl");
+    const vertTxt = this.getGlslVertSrc();
+    const fragTxt = this.compileGraphToGlslFragSrc();
+
+    const vertShader = createShader(this.gl, this.gl.VERTEX_SHADER, vertTxt);
+    const fragShader = createShader(this.gl, this.gl.FRAGMENT_SHADER, fragTxt);
+
+    const program = createProgram(this.gl, fragShader, vertShader);
+    this.setState({program: program});
+    this.gl.useProgram(program);
+
+    const positionBuffer = this.gl.createBuffer();
+    const vertices = new Float32Array([
+        -1.0, 1.0,
+        -1.0, -1.0,
+        1.0, 1.0,
+        1.0, -1.0
+    ]);
+    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, positionBuffer);
+    this.gl.bufferData(this.gl.ARRAY_BUFFER, vertices, this.gl.STATIC_DRAW);
+
+    this.setState({startTime: (new Date()).getTime()});
+
+    requestAnimationFrame(()=>this.update());
+  }
+
+  update() {
+    const time = (((new Date()).getTime() - this.state.startTime) % this.state.period) / this.state.period;
+
+    console.log(time);
+
+    const resolutionLoc = this.gl.getUniformLocation(this.state.program, "u_resolution");
+    this.gl.uniform2f(resolutionLoc, this.gl.canvas.width, this.gl.canvas.height);
+
+    const timeLoc = this.gl.getUniformLocation(this.state.program, "u_time");
+    this.gl.uniform1f(timeLoc, time);
+
+    const positionLoc = this.gl.getAttribLocation(this.state.program, "xy_pos");
+    this.gl.vertexAttribPointer(positionLoc, 2, this.gl.FLOAT, false, 0, 0);
+    this.gl.enableVertexAttribArray(positionLoc);
+
+    this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
+    requestAnimationFrame(()=>this.update());
   }
 
   render() {
     return (
       <div className="App">
-        <canvas ref={this.canvas} width={100} height={100} />
+        <canvas ref={this.canvas} width={window.innerWidth} height={window.innerHeight} />
       </div>
     );
   }
