@@ -34,28 +34,15 @@ class App extends Component {
   constructor() {
     super();
     this.state = {
+      time: 0.0,
       period: 10000.0,
+      //TODO: Change graph to separate nodes and edges
       graph: {
-        init: [
-          "precision highp float;"
-        ],
-        uniforms: {
-          time: "uniform float u_time;",
-          resolution: "uniform vec2 u_resolution;"
-        },
-        vars: {
-          x: "float x = (gl_FragCoord.x / u_resolution.x) * 2.0 - 1.0;",
-          y: "float y = (gl_FragCoord.y / u_resolution.y) * 2.0 - 1.0;",
-          t: "float t = u_time;"
-        },
         out: {
           r: "scaledOut",
           g: "movingOut",
           b: "t"
         },
-        finalOut: [
-          "gl_FragColor = vec4(r, g, b, 1);"
-        ],
         funcs: [
           new Cos("scaledR", "scaledOut"),
           new Cos("movingR", "movingOut"),
@@ -70,13 +57,8 @@ class App extends Component {
   }
 
   compileGraphToGlslFragSrc() {
-    let fragTxt = this.state.graph.init.join("\n");
-    fragTxt += "\n\n";
-    fragTxt += Object.values(this.state.graph.uniforms).join("\n");
-    fragTxt += "\n\n";
-    fragTxt += "void main() {\n";
-    fragTxt += Object.values(this.state.graph.vars).join("\n");
-    fragTxt += "\n\n";
+
+    //TODO: Detect cycles in order to detect cycles.
 
     let outIdToFunc = {};
     const funcs = this.state.graph.funcs;
@@ -88,7 +70,8 @@ class App extends Component {
       }
     }
 
-    let known = new Set(["x", "y", "t"])
+    let orderedFuncs =[];
+    let known = new Set(["x", "y", "t"]);
     let stack = [this.state.graph.out.r, this.state.graph.out.g, this.state.graph.out.b];
     while (stack.length > 0) {
       const topId = stack[stack.length - 1];
@@ -98,8 +81,7 @@ class App extends Component {
         const topFunc = outIdToFunc[topId];
         const unknownDeps = Object.values(topFunc.inputIds).filter(dep => !(known.has(dep)));
         if (unknownDeps.length == 0) {
-          fragTxt += topFunc.toGLSL();
-          fragTxt += "\n";
+          orderedFuncs.push(topFunc);
           known.add(topId);
           stack.pop();
         } else {
@@ -107,10 +89,37 @@ class App extends Component {
         }
       }
     }
-    fragTxt+= "\n";
-    fragTxt += `gl_FragColor = vec4(${this.state.graph.out.r}, ${this.state.graph.out.g}, ${this.state.graph.out.b}, 1);`
-    fragTxt += "}"
-    return fragTxt;
+
+    console.log(orderedFuncs);
+
+    return `
+    precision highp float;
+    uniform float u_time;
+    uniform vec2 u_resolution;
+    void main() {
+      float x = (gl_FragCoord.x / u_resolution.x) * 2.0 - 1.0;
+      float y = (gl_FragCoord.y / u_resolution.y) * 2.0 - 1.0;
+      float t = u_time;
+      ${orderedFuncs.map((func) => {
+        switch (func.type) {
+          case "Const":
+            return `float ${func.outputIds.out} = ${func.val};`;
+          case "Abs":
+            return `float ${func.outputIds.abs} = abs(${func.inputIds.op});`;
+          case "Plus":
+            return `float ${func.outputIds.sum} = ${func.inputIds.op1} + ${func.inputIds.op2};`;
+          case "Mult":
+            return `float ${func.outputIds.prod} = ${func.inputIds.op1} * ${func.inputIds.op2};`;
+          case "RectToPolar":
+            return `float ${func.outputIds.r} = (${func.inputIds.x} * ${func.inputIds.x}) + (${func.inputIds.y} * ${func.inputIds.y});\n`
+              + `float ${func.outputIds.theta} = atan(${func.inputIds.y}, ${func.inputIds.x});`;
+          case "Cos":
+            return `float ${func.outputIds.out} = cos(${func.inputIds.theta});`;
+          }
+        }).join("\n")}
+        gl_FragColor = vec4(${this.state.graph.out.r}, ${this.state.graph.out.g}, ${this.state.graph.out.b}, 1);
+    }
+    `;
   }
 
   getGlslVertSrc() {
@@ -146,15 +155,15 @@ class App extends Component {
   }
 
   update() {
-    const time = (((new Date()).getTime() - this.state.startTime) % this.state.period) / this.state.period;
-
-    console.log(time);
+    this.setState({
+      time: (((new Date()).getTime() - this.state.startTime) % this.state.period) / this.state.period
+    });
 
     const resolutionLoc = this.gl.getUniformLocation(this.state.program, "u_resolution");
     this.gl.uniform2f(resolutionLoc, this.gl.canvas.width, this.gl.canvas.height);
 
     const timeLoc = this.gl.getUniformLocation(this.state.program, "u_time");
-    this.gl.uniform1f(timeLoc, time);
+    this.gl.uniform1f(timeLoc, this.state.time);
 
     const positionLoc = this.gl.getAttribLocation(this.state.program, "xy_pos");
     this.gl.vertexAttribPointer(positionLoc, 2, this.gl.FLOAT, false, 0, 0);
