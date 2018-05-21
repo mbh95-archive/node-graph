@@ -36,35 +36,73 @@ class App extends Component {
     this.state = {
       time: 0.0,
       period: 10000.0,
-      //TODO: Change graph to separate nodes and edges
       graph: {
-        out: {
-          r: "scaledOut",
-          g: "movingOut",
-          b: "t"
-        },
         funcs: [
-          new Cos("scaledR", "scaledOut"),
-          new Cos("movingR", "movingOut"),
-          new Const(6.28, "twoPi"),
-          new Mult("scaledR", "t", "movingR"),
-          new Mult("r", "twoPi", "scaledR"),
-          new RectToPolar("x", "y", "r", "theta")
-        ]
+          new Const(.5, "shift_amp"),
+          new Const(10, "shift_period_coef"),
+          new Abs("abs_in", "abs_out"),
+          new Mult("amp_mult_coef", "amp_mult_val", "amp_out"),
+          new Mult("per_mult_coef", "per_mult_val", "per_out"),
+          new Plus("tpx_t", "tpx_x", "tpx_out"),
+          new Cos("shift_cos_in", "shift_cos_out"),
+          new Plus("shift_add_x", "shift_add_c", "shift_add_out"),
+          new Cos("scale_cos_in", "scale_cos_out"),
+          new Cos("time_cos_in", "time_cos_out"),
+          new Const(6.28, "two_pi"),
+          new Mult("time_mult_in1", "time_mult_in2", "time_mult_out"),
+          new Mult("scale_mult_in1", "scale_mult_in2", "scale_mult_out"),
+          new RectToPolar("r2p_x", "r2p_y", "r2p_r", "r2p_theta")
+        ],
+        edges: {
+          // dest: src
+          "per_mult_coef": "shift_period_coef",
+          "per_mult_val": "tpx_out",
+          "tpx_t": "t",
+          "tpx_x": "x",
+          "amp_mult_coef": "shift_amp",
+          "amp_mult_val": "abs_out",
+          "abs_in": "shift_cos_out",
+          "shift_cos_in": "per_out",
+          "shift_add_c": "amp_out",
+          "shift_add_x": "x",
+          "r2p_x": "shift_add_out",
+          "r2p_y": "y",
+          "time_mult_in2": "t",
+          "b": "t",
+          "scale_mult_in2": "r2p_r",
+          "scale_mult_in1": "two_pi",
+          "time_mult_in1": "scale_mult_out",
+          "scale_cos_in": "scale_mult_out",
+          "time_cos_in": "time_mult_out",
+          "r": "scale_cos_out",
+          "g": "time_cos_out"
+        }
       }
     };
     this.canvas = React.createRef();
+  }
+
+  validateGraph() {
+    // TODO: implement
+    // A Graph is valid if
+    // 1. No two input ids are the same. This includes implicit "r", "g", "b" input ids.
+    // 2. No two output ids are the same. This includes implicit "x", "y", "t" output ids.
+    // (1+2). We could strengthen these conditions and just say all ids must be unique and none can be "r", "g", "b", "x", "y", or "t".
+    // 3. Each input id has either zero edges or one edge leading to it.
+    // 4. The graph is acyclic.
+    // (5). Not a graph property, but for our purposes each input/output id must be a valid GLSL variable name or be uniquely translatable into one.
   }
 
   compileGraphToGlslFragSrc() {
 
     //TODO: Detect cycles in order to detect cycles.
 
-    let outIdToFunc = {};
     const funcs = this.state.graph.funcs;
-    for (let i = 0; i < funcs.length; i++) {
-      const func = funcs[i];
-      for (let outName in func.outputIds) {
+    const edges = this.state.graph.edges;
+
+    let outIdToFunc = {};
+    for (var func of funcs) {
+      for (var outName in func.outputIds) {
         const outId = func.outputIds[outName];
         outIdToFunc[outId] = func;
       }
@@ -72,16 +110,39 @@ class App extends Component {
 
     let orderedFuncs =[];
     let known = new Set(["x", "y", "t"]);
-    let stack = [this.state.graph.out.r, this.state.graph.out.g, this.state.graph.out.b];
+
+    let stack = [];
+
+    // "r", "g", and "b" are assigned a default value of zero if they have no incoming edges.
+    let r_in = "0";
+    if ("r" in edges) {
+      stack.push(edges["r"]);
+      r_in = edges["r"];
+    }
+
+    let g_in = "0";
+    if ("g" in edges) {
+      stack.push(edges["g"]);
+      g_in = edges["g"];
+    }
+
+    let b_in = "0";
+    if ("b" in edges) {
+      stack.push(edges["b"]);
+      b_in = edges["b"];
+    }
+
     while (stack.length > 0) {
       const topId = stack[stack.length - 1];
       if (known.has(topId)) {
         stack.pop();
       } else {
-        const topFunc = outIdToFunc[topId];
-        const unknownDeps = Object.values(topFunc.inputIds).filter(dep => !(known.has(dep)));
-        if (unknownDeps.length == 0) {
-          orderedFuncs.push(topFunc);
+        const topParent = outIdToFunc[topId];
+        const unknownDeps = Object.values(topParent.inputIds)
+          .map(input => edges[input])
+          .filter(output => !known.has(output));
+        if (unknownDeps.length === 0) {
+          orderedFuncs.push(topParent);
           known.add(topId);
           stack.pop();
         } else {
@@ -89,8 +150,6 @@ class App extends Component {
         }
       }
     }
-
-    console.log(orderedFuncs);
 
     return `
     precision highp float;
@@ -103,21 +162,23 @@ class App extends Component {
       ${orderedFuncs.map((func) => {
         switch (func.type) {
           case "Const":
-            return `float ${func.outputIds.out} = ${func.val};`;
+            return `float ${func.outputIds.out} = float(${func.val});`;
           case "Abs":
-            return `float ${func.outputIds.abs} = abs(${func.inputIds.op});`;
+            return `float ${func.outputIds.abs} = abs(${edges[func.inputIds.op]});`;
           case "Plus":
-            return `float ${func.outputIds.sum} = ${func.inputIds.op1} + ${func.inputIds.op2};`;
+            return `float ${func.outputIds.sum} = ${edges[func.inputIds.op1]} + ${edges[func.inputIds.op2]};`;
           case "Mult":
-            return `float ${func.outputIds.prod} = ${func.inputIds.op1} * ${func.inputIds.op2};`;
+            return `float ${func.outputIds.prod} = ${edges[func.inputIds.op1]} * ${edges[func.inputIds.op2]};`;
           case "RectToPolar":
-            return `float ${func.outputIds.r} = (${func.inputIds.x} * ${func.inputIds.x}) + (${func.inputIds.y} * ${func.inputIds.y});\n`
-              + `float ${func.outputIds.theta} = atan(${func.inputIds.y}, ${func.inputIds.x});`;
+            return `float ${func.outputIds.r} = (${edges[func.inputIds.x]} * ${edges[func.inputIds.x]}) + (${edges[func.inputIds.y]} * ${edges[func.inputIds.y]});\n`
+              + `float ${func.outputIds.theta} = atan(${edges[func.inputIds.y]}, ${edges[func.inputIds.x]});`;
           case "Cos":
-            return `float ${func.outputIds.out} = cos(${func.inputIds.theta});`;
+            return `float ${func.outputIds.out} = cos(${edges[func.inputIds.theta]});`;
+          default:
+            return "";
           }
         }).join("\n")}
-        gl_FragColor = vec4(${this.state.graph.out.r}, ${this.state.graph.out.g}, ${this.state.graph.out.b}, 1);
+        gl_FragColor = vec4(${r_in}, ${g_in}, ${b_in}, 1);
     }
     `;
   }
@@ -129,6 +190,7 @@ class App extends Component {
   componentDidMount() {
     const canvas = this.canvas.current;
     this.gl = canvas.getContext("webgl");
+
     const vertTxt = this.getGlslVertSrc();
     const fragTxt = this.compileGraphToGlslFragSrc();
 
@@ -149,6 +211,13 @@ class App extends Component {
     this.gl.bindBuffer(this.gl.ARRAY_BUFFER, positionBuffer);
     this.gl.bufferData(this.gl.ARRAY_BUFFER, vertices, this.gl.STATIC_DRAW);
 
+    const positionLoc = this.gl.getAttribLocation(program, "xy_pos");
+    this.gl.vertexAttribPointer(positionLoc, 2, this.gl.FLOAT, false, 0, 0);
+    this.gl.enableVertexAttribArray(positionLoc);
+
+    const resolutionLoc = this.gl.getUniformLocation(program, "u_resolution");
+    this.gl.uniform2f(resolutionLoc, this.gl.canvas.width, this.gl.canvas.height);
+
     this.setState({startTime: (new Date()).getTime()});
 
     requestAnimationFrame(()=>this.update());
@@ -159,17 +228,11 @@ class App extends Component {
       time: (((new Date()).getTime() - this.state.startTime) % this.state.period) / this.state.period
     });
 
-    const resolutionLoc = this.gl.getUniformLocation(this.state.program, "u_resolution");
-    this.gl.uniform2f(resolutionLoc, this.gl.canvas.width, this.gl.canvas.height);
-
     const timeLoc = this.gl.getUniformLocation(this.state.program, "u_time");
     this.gl.uniform1f(timeLoc, this.state.time);
 
-    const positionLoc = this.gl.getAttribLocation(this.state.program, "xy_pos");
-    this.gl.vertexAttribPointer(positionLoc, 2, this.gl.FLOAT, false, 0, 0);
-    this.gl.enableVertexAttribArray(positionLoc);
-
     this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
+
     requestAnimationFrame(()=>this.update());
   }
 
