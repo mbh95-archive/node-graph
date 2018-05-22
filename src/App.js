@@ -83,7 +83,6 @@ class App extends Component {
   }
 
   compileGraphToGlslFragSrc() {
-    // TODO: implement
     // A Graph is valid if
     // 1. No two input ids are the same. This includes implicit "r", "g", "b" input ids.
     // 2. No two output ids are the same. This includes implicit "x", "y", "t" output ids.
@@ -271,19 +270,31 @@ class App extends Component {
     this.gl.vertexAttribPointer(positionLoc, 2, this.gl.FLOAT, false, 0, 0);
     this.gl.enableVertexAttribArray(positionLoc);
 
-    const resolutionLoc = this.gl.getUniformLocation(program, "u_resolution");
-    this.gl.uniform2f(resolutionLoc, this.gl.canvas.width, this.gl.canvas.height);
+    
 
     this.setState({startTime: (new Date()).getTime()});
 
     requestAnimationFrame(()=>this.update());
   }
 
+  resize() {
+    const new_width = this.gl.canvas.clientWidth;
+    const new_height = this.gl.canvas.clientHeight;
+    if (this.gl.canvas.width != new_width || this.gl.canvas.height != new_height) {
+      this.gl.canvas.width = new_width;
+      this.gl.canvas.height = new_height;
+      this.gl.viewport(0, 0, this.gl.canvas.width, this.gl.canvas.height);
+      const resolutionLoc = this.gl.getUniformLocation(this.state.program, "u_resolution");
+      this.gl.uniform2f(resolutionLoc, this.gl.canvas.width, this.gl.canvas.height);
+    }
+  }
+  
   update() {
+    this.resize();
+
     this.setState({
       time: (((new Date()).getTime() - this.state.startTime) % this.state.period) / this.state.period
     });
-
     const timeLoc = this.gl.getUniformLocation(this.state.program, "u_time");
     this.gl.uniform1f(timeLoc, this.state.time);
 
@@ -295,7 +306,7 @@ class App extends Component {
   render() {
     return (
       <div className="App">
-        <canvas ref={this.canvas} width={window.innerWidth} height={window.innerHeight} />
+        <canvas id="gl-canvas" ref={this.canvas} />
       </div>
     );
   }
