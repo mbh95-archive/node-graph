@@ -51,7 +51,7 @@ class App extends Component {
           new Const(6.28, "two_pi"),
           new Mult("time_mult_in1", "time_mult_in2", "time_mult_out"),
           new Mult("scale_mult_in1", "scale_mult_in2", "scale_mult_out"),
-          new RectToPolar("r2p_x", "r2p_y", "r2p_r", "r2p_theta")
+          new RectToPolar("r2p_x", "r2p_y", "r2p_r", "r2p_theta"),
         ],
         edges: {
           // dest: src
@@ -82,27 +82,61 @@ class App extends Component {
     this.canvas = React.createRef();
   }
 
-  validateGraph() {
+  compileGraphToGlslFragSrc() {
     // TODO: implement
     // A Graph is valid if
     // 1. No two input ids are the same. This includes implicit "r", "g", "b" input ids.
     // 2. No two output ids are the same. This includes implicit "x", "y", "t" output ids.
     // (1+2). We could strengthen these conditions and just say all ids must be unique and none can be "r", "g", "b", "x", "y", or "t".
-    // 3. Each input id has either zero edges or one edge leading to it.
-    // 4. The graph is acyclic.
-    // (5). Not a graph property, but for our purposes each input/output id must be a valid GLSL variable name or be uniquely translatable into one.
-  }
-
-  compileGraphToGlslFragSrc() {
-
-    //TODO: Detect cycles in order to detect cycles.
-
+    // 3. Each input id has either zero edges or one edge leading to it. This is now guaranteed by the way edges are stored.
+    // 4. Each edge input/output id is a valid input/output id.
+    // 5. The graph is acyclic.
+    // (6). Not a graph property, but for our purposes each output id must be a valid GLSL variable name or be uniquely translatable into one.
+    
     const funcs = this.state.graph.funcs;
     const edges = this.state.graph.edges;
 
+    // Validate nodes
+    // * Each input id must be unique (including the implicit "r", "g", "b" input ids).
+    // * Each output id must be unique (including the implicit "x", "y", "t" output ids).
+    // * Each output id must be a valid GLSL variable name.
+    const varRegexp = /^[a-zA-Z_]\w*$/;
+
+    let inputIdSet = new Set(["r", "g", "b"]);
+    let outputIdSet = new Set(["x", "y", "t"]);
+
+    for (const func of funcs) {
+      for (const inId of Object.values(func.inputIds)) {
+        if (inputIdSet.has(inId)) {
+          throw new Error(`Invalid graph: Duplicate input ID "${inId}"`);
+        } else {
+          inputIdSet.add(inId);
+        }
+      }
+      for (const outId of Object.values(func.outputIds)) {
+        if (!outId.match(varRegexp)) {
+          throw new Error(`Invalid graph: Output ID "${outId}" not a valid GLSL variable name.`);
+        }
+        if (outputIdSet.has(outId)) {
+          throw new Error(`Invalid graph: Duplicate output ID "${outId}"`);
+        } else {
+          outputIdSet.add(outId);
+        }
+      }
+    }
+
+    // Validate edges
+    // * Each edge must lead from a valid output id to a valid input id.
+    for (const edgeIn of Object.keys(edges)) {
+      const edgeOut = edges[edgeIn];
+      if (!inputIdSet.has(edgeIn) || !outputIdSet.has(edgeOut)) {
+        throw new Error(`Invalid graph: Bad edge ${edgeOut} -> ${edgeIn}`);
+      }
+    }
+
     let outIdToFunc = {};
-    for (var func of funcs) {
-      for (var outName in func.outputIds) {
+    for (const func of funcs) {
+      for (const outName in func.outputIds) {
         const outId = func.outputIds[outName];
         outIdToFunc[outId] = func;
       }
@@ -110,9 +144,9 @@ class App extends Component {
 
     let orderedFuncs =[];
     let known = new Set(["x", "y", "t"]);
-
+    let awaitingFuncs = new Set([]);
     let stack = [];
-
+    
     // "r", "g", and "b" are assigned a default value of zero if they have no incoming edges.
     let r_in = "0";
     if ("r" in edges) {
@@ -137,16 +171,23 @@ class App extends Component {
       if (known.has(topId)) {
         stack.pop();
       } else {
-        const topParent = outIdToFunc[topId];
-        const unknownDeps = Object.values(topParent.inputIds)
+        const topFunc = outIdToFunc[topId];
+        const unknownDeps = Object.values(topFunc.inputIds)
           .map(input => edges[input])
           .filter(output => !known.has(output));
         if (unknownDeps.length === 0) {
-          orderedFuncs.push(topParent);
-          known.add(topId);
+          orderedFuncs.push(topFunc);
+          for (const outId of Object.values(topFunc.outputIds)) {
+            known.add(outId);
+          }
+          awaitingFuncs.delete(topFunc);
           stack.pop();
         } else {
+          if (awaitingFuncs.has(topFunc)) {
+            throw new Error(`Invalid graph: Cycle detected at ${topId}`);
+          }
           stack = stack.concat(unknownDeps);
+          awaitingFuncs.add(topFunc);
         }
       }
     }
@@ -183,8 +224,18 @@ class App extends Component {
     `;
   }
 
+  getDefaultGlslFragSrc() {
+    return `
+    void main() {
+      gl_FragColor = vec4(1, 0, 1, 1);
+    }`
+  }
   getGlslVertSrc() {
-    return "attribute vec2 xy_pos;\nvoid main() {\ngl_Position = vec4(xy_pos, 0, 1);\n}";
+    return `
+    attribute vec2 xy_pos;
+    void main() {
+      gl_Position = vec4(xy_pos, 0, 1);
+    }`;
   }
 
   componentDidMount() {
@@ -192,7 +243,12 @@ class App extends Component {
     this.gl = canvas.getContext("webgl");
 
     const vertTxt = this.getGlslVertSrc();
-    const fragTxt = this.compileGraphToGlslFragSrc();
+    let fragTxt = this.getDefaultGlslFragSrc();
+    try {
+      fragTxt = this.compileGraphToGlslFragSrc();
+    } catch(error) {
+      console.log(error);
+    }
 
     const vertShader = createShader(this.gl, this.gl.VERTEX_SHADER, vertTxt);
     const fragShader = createShader(this.gl, this.gl.FRAGMENT_SHADER, fragTxt);
