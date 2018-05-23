@@ -1,6 +1,6 @@
 import React, { Component } from 'react';
 import './App.css';
-import {Const, Abs, Plus, Mult, Cos, RectToPolar} from './Functions.js'
+import { Const, Abs, Plus, Mult, Cos, RectToPolar } from './Functions.js'
 
 function createShader(gl, type, source) {
   console.log(source);
@@ -91,7 +91,7 @@ class App extends Component {
     // 4. Each edge input/output id is a valid input/output id.
     // 5. The graph is acyclic.
     // (6). Not a graph property, but for our purposes each output id must be a valid GLSL variable name or be uniquely translatable into one.
-    
+
     const funcs = this.state.graph.funcs;
     const edges = this.state.graph.edges;
 
@@ -105,21 +105,21 @@ class App extends Component {
     let outputIdSet = new Set(["x", "y", "t"]);
 
     for (const func of funcs) {
-      for (const inId of Object.values(func.inputIds)) {
-        if (inputIdSet.has(inId)) {
-          throw new Error(`Invalid graph: Duplicate input ID "${inId}"`);
+      for (const input of Object.values(func.inputs)) {
+        if (inputIdSet.has(input.id)) {
+          throw new Error(`Invalid graph: Duplicate input ID "${input.id}"`);
         } else {
-          inputIdSet.add(inId);
+          inputIdSet.add(input.id);
         }
       }
-      for (const outId of Object.values(func.outputIds)) {
-        if (!outId.match(varRegexp)) {
-          throw new Error(`Invalid graph: Output ID "${outId}" not a valid GLSL variable name.`);
+      for (const output of Object.values(func.outputs)) {
+        if (!output.id.match(varRegexp)) {
+          throw new Error(`Invalid graph: Output ID "${output.id}" not a valid GLSL variable name.`);
         }
-        if (outputIdSet.has(outId)) {
-          throw new Error(`Invalid graph: Duplicate output ID "${outId}"`);
+        if (outputIdSet.has(output.id)) {
+          throw new Error(`Invalid graph: Duplicate output ID "${output.id}"`);
         } else {
-          outputIdSet.add(outId);
+          outputIdSet.add(output.id);
         }
       }
     }
@@ -135,17 +135,16 @@ class App extends Component {
 
     let outIdToFunc = {};
     for (const func of funcs) {
-      for (const outName in func.outputIds) {
-        const outId = func.outputIds[outName];
-        outIdToFunc[outId] = func;
+      for (const output of Object.values(func.outputs)) {
+        outIdToFunc[output.id] = func;
       }
     }
 
-    let orderedFuncs =[];
+    let orderedFuncs = [];
     let known = new Set(["x", "y", "t"]);
     let awaitingFuncs = new Set([]);
     let stack = [];
-    
+
     // "r", "g", and "b" are assigned a default value of zero if they have no incoming edges.
     let r_in = "0";
     if ("r" in edges) {
@@ -171,13 +170,14 @@ class App extends Component {
         stack.pop();
       } else {
         const topFunc = outIdToFunc[topId];
-        const unknownDeps = Object.values(topFunc.inputIds)
-          .map(input => edges[input])
-          .filter(output => !known.has(output));
+        const unknownDeps = Object.values(topFunc.inputs)
+          .filter(input => input.id in edges)
+          .map(input => edges[input.id])
+          .filter(outputId => !known.has(outputId));
         if (unknownDeps.length === 0) {
           orderedFuncs.push(topFunc);
-          for (const outId of Object.values(topFunc.outputIds)) {
-            known.add(outId);
+          for (const output of Object.values(topFunc.outputs)) {
+            known.add(output.id);
           }
           awaitingFuncs.delete(topFunc);
           stack.pop();
@@ -187,6 +187,19 @@ class App extends Component {
           }
           stack = stack.concat(unknownDeps);
           awaitingFuncs.add(topFunc);
+        }
+      }
+    }
+
+    function getOpOrDefault(input) {
+      if (input.id in edges) {
+        return edges[input.id];
+      } else {
+        if (Number.isInteger(input.defaultValue)) {
+          // GLSL expects doubles to have at least one decimal place.
+          return input.defaultValue + ".0";
+        } else {
+          return input.defaultValue.toString();
         }
       }
     }
@@ -202,22 +215,22 @@ class App extends Component {
       ${orderedFuncs.map((func) => {
         switch (func.type) {
           case "Const":
-            return `float ${func.outputIds.out} = float(${func.val});`;
+            return `float ${func.outputs.out.id} = float(${func.val});`;
           case "Abs":
-            return `float ${func.outputIds.abs} = abs(${edges[func.inputIds.op]});`;
+            return `float ${func.outputs.abs.id} = abs(${getOpOrDefault(func.inputs.op)});`;
           case "Plus":
-            return `float ${func.outputIds.sum} = ${edges[func.inputIds.op1]} + ${edges[func.inputIds.op2]};`;
+            return `float ${func.outputs.sum.id} = ${getOpOrDefault(func.inputs.op1)} + ${getOpOrDefault(func.inputs.op2)};`;
           case "Mult":
-            return `float ${func.outputIds.prod} = ${edges[func.inputIds.op1]} * ${edges[func.inputIds.op2]};`;
+            return `float ${func.outputs.prod.id} = ${getOpOrDefault(func.inputs.op1)} * ${getOpOrDefault(func.inputs.op2)};`;
           case "RectToPolar":
-            return `float ${func.outputIds.r} = (${edges[func.inputIds.x]} * ${edges[func.inputIds.x]}) + (${edges[func.inputIds.y]} * ${edges[func.inputIds.y]});\n`
-              + `float ${func.outputIds.theta} = atan(${edges[func.inputIds.y]}, ${edges[func.inputIds.x]});`;
+            return `float ${func.outputs.r.id} = (${getOpOrDefault(func.inputs.x)} * ${getOpOrDefault(func.inputs.x)}) + (${getOpOrDefault(func.inputs.y)} * ${getOpOrDefault(func.inputs.y)});\n`
+              + `float ${func.outputs.theta.id} = atan(${getOpOrDefault(func.inputs.y)}, ${getOpOrDefault(func.inputs.x)});`;
           case "Cos":
-            return `float ${func.outputIds.out} = cos(${edges[func.inputIds.theta]});`;
+            return `float ${func.outputs.out.id} = cos(${getOpOrDefault(func.inputs.theta)});`;
           default:
             return "";
-          }
-        }).join("\n")}
+        }
+      }).join("\n")}
         gl_FragColor = vec4(${r_in}, ${g_in}, ${b_in}, 1);
     }
     `;
@@ -245,7 +258,7 @@ class App extends Component {
     let fragTxt = this.getDefaultGlslFragSrc();
     try {
       fragTxt = this.compileGraphToGlslFragSrc();
-    } catch(error) {
+    } catch (error) {
       console.log(error);
     }
 
@@ -253,15 +266,15 @@ class App extends Component {
     const fragShader = createShader(this.gl, this.gl.FRAGMENT_SHADER, fragTxt);
 
     const program = createProgram(this.gl, fragShader, vertShader);
-    this.setState({program: program});
+    this.setState({ program: program });
     this.gl.useProgram(program);
 
     const positionBuffer = this.gl.createBuffer();
     const vertices = new Float32Array([
-        -1.0, 1.0,
-        -1.0, -1.0,
-        1.0, 1.0,
-        1.0, -1.0
+      -1.0, 1.0,
+      -1.0, -1.0,
+      1.0, 1.0,
+      1.0, -1.0
     ]);
     this.gl.bindBuffer(this.gl.ARRAY_BUFFER, positionBuffer);
     this.gl.bufferData(this.gl.ARRAY_BUFFER, vertices, this.gl.STATIC_DRAW);
@@ -270,17 +283,17 @@ class App extends Component {
     this.gl.vertexAttribPointer(positionLoc, 2, this.gl.FLOAT, false, 0, 0);
     this.gl.enableVertexAttribArray(positionLoc);
 
-    
 
-    this.setState({startTime: (new Date()).getTime()});
 
-    requestAnimationFrame(()=>this.update());
+    this.setState({ startTime: (new Date()).getTime() });
+
+    requestAnimationFrame(() => this.update());
   }
 
   resize() {
     const new_width = this.gl.canvas.clientWidth;
     const new_height = this.gl.canvas.clientHeight;
-    if (this.gl.canvas.width != new_width || this.gl.canvas.height != new_height) {
+    if (this.gl.canvas.width !== new_width || this.gl.canvas.height !== new_height) {
       this.gl.canvas.width = new_width;
       this.gl.canvas.height = new_height;
       this.gl.viewport(0, 0, this.gl.canvas.width, this.gl.canvas.height);
@@ -288,7 +301,7 @@ class App extends Component {
       this.gl.uniform2f(resolutionLoc, this.gl.canvas.width, this.gl.canvas.height);
     }
   }
-  
+
   update() {
     this.resize();
 
@@ -300,7 +313,7 @@ class App extends Component {
 
     this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
 
-    requestAnimationFrame(()=>this.update());
+    requestAnimationFrame(() => this.update());
   }
 
   render() {
