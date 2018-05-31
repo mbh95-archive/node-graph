@@ -1,34 +1,7 @@
 import React, { Component } from 'react';
 import './App.css';
 import { Const, Abs, Plus, Mult, Cos, RectToPolar } from './Functions.js'
-
-function createShader(gl, type, source) {
-  console.log(source);
-  const shader = gl.createShader(type);
-  gl.shaderSource(shader, source);
-  gl.compileShader(shader);
-  const success = gl.getShaderParameter(shader, gl.COMPILE_STATUS);
-  if (success) {
-    return shader;
-  } else {
-    console.log(gl.getShaderInfoLog(shader));
-    gl.deleteShader(shader);
-  }
-}
-
-function createProgram(gl, vertexShader, fragmentShader) {
-  const program = gl.createProgram();
-  gl.attachShader(program, vertexShader);
-  gl.attachShader(program, fragmentShader);
-  gl.linkProgram(program);
-  const success = gl.getProgramParameter(program, gl.LINK_STATUS);
-  if (success) {
-    return program;
-  } else {
-    console.log(gl.getProgramInfoLog(program));
-    gl.deleteProgram(program);
-  }
-}
+import {createProgram, isValidGLSLVarName, getDefaultGlslFragSrc, getDefaultGlslVertSrc} from './GLUtils.js'
 
 class App extends Component {
   constructor() {
@@ -99,8 +72,6 @@ class App extends Component {
     // * Each input id must be unique (including the implicit "r", "g", "b" input ids).
     // * Each output id must be unique (including the implicit "x", "y", "t" output ids).
     // * Each output id must be a valid GLSL variable name.
-    const varRegexp = /^[a-zA-Z_]\w*$/;
-
     let inputIdSet = new Set(["r", "g", "b"]);
     let outputIdSet = new Set(["x", "y", "t"]);
 
@@ -113,7 +84,7 @@ class App extends Component {
         }
       }
       for (const output of Object.values(func.outputs)) {
-        if (!output.id.match(varRegexp)) {
+        if (!isValidGLSLVarName(output.id)) {
           throw new Error(`Invalid graph: Output ID "${output.id}" not a valid GLSL variable name.`);
         }
         if (outputIdSet.has(output.id)) {
@@ -236,36 +207,18 @@ class App extends Component {
     `;
   }
 
-  getDefaultGlslFragSrc() {
-    return `
-    void main() {
-      gl_FragColor = vec4(1, 0, 1, 1);
-    }`
-  }
-  getGlslVertSrc() {
-    return `
-    attribute vec2 xy_pos;
-    void main() {
-      gl_Position = vec4(xy_pos, 0, 1);
-    }`;
-  }
-
   componentDidMount() {
     const canvas = this.canvas.current;
     this.gl = canvas.getContext("webgl");
 
-    const vertTxt = this.getGlslVertSrc();
-    let fragTxt = this.getDefaultGlslFragSrc();
+    const vertSrc = getDefaultGlslVertSrc();
+    let fragSrc = getDefaultGlslFragSrc();
     try {
-      fragTxt = this.compileGraphToGlslFragSrc();
+      fragSrc = this.compileGraphToGlslFragSrc();
     } catch (error) {
       console.log(error);
     }
-
-    const vertShader = createShader(this.gl, this.gl.VERTEX_SHADER, vertTxt);
-    const fragShader = createShader(this.gl, this.gl.FRAGMENT_SHADER, fragTxt);
-
-    const program = createProgram(this.gl, fragShader, vertShader);
+    const program = createProgram(this.gl, vertSrc, fragSrc);
     this.setState({ program: program });
     this.gl.useProgram(program);
 
@@ -282,8 +235,6 @@ class App extends Component {
     const positionLoc = this.gl.getAttribLocation(program, "xy_pos");
     this.gl.vertexAttribPointer(positionLoc, 2, this.gl.FLOAT, false, 0, 0);
     this.gl.enableVertexAttribArray(positionLoc);
-
-
 
     this.setState({ startTime: (new Date()).getTime() });
 
