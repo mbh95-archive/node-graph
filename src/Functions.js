@@ -1,4 +1,4 @@
-class Function {
+export class Function {
   constructor(type, inputs, outputs) {
     this.type = type;
     this.inputs = inputs;
@@ -6,14 +6,14 @@ class Function {
   }
 }
 
-class Input {
+export class Input {
   constructor(id, defaultValue) {
     this.id = id;
     this.defaultValue = defaultValue;
   }
 }
 
-class Output {
+export class Output {
   constructor(id) {
     this.id = id;
   }
